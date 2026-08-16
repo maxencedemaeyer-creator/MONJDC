@@ -1,0 +1,6 @@
+{
+  "name": "MonJDC - Journal de Classe Numérique",
+  "description": "Journal de classe numérique pour enseignants belges (FWB / SeGEC) avec gestion de l'horaire, référentiels de compétences, fiches de préparation, suivi des élèves et carnet de cotes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

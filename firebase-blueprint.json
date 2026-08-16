@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "jdc_entries": {
+      "title": "JDC Entry",
+      "description": "Leçons et séances du journal de classe",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "classId": { "type": "string" },
+        "date": { "type": "string" },
+        "dayOfWeek": { "type": "number" },
+        "periodNumber": { "type": "number" },
+        "weekType": { "type": "string" },
+        "domain": { "type": "string" },
+        "subjectTitle": { "type": "string" },
+        "lessonTitle": { "type": "string" },
+        "objectives": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["userId", "lessonTitle"]
+    },
+    "students": {
+      "title": "Student",
+      "description": "Élèves et aménagements raisonnables",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "classId": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" }
+      },
+      "required": ["userId", "firstName", "lastName"]
+    },
+    "evaluations": {
+      "title": "Evaluation",
+      "description": "Évaluations et notes du carnet de cotes",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "classId": { "type": "string" },
+        "title": { "type": "string" }
+      },
+      "required": ["userId", "title"]
+    },
+    "schedule": {
+      "title": "Schedule Slot",
+      "description": "Grille horaire type de la classe",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "classId": { "type": "string" },
+        "dayOfWeek": { "type": "number" },
+        "periodNumber": { "type": "number" }
+      },
+      "required": ["userId"]
+    },
+    "notes": {
+      "title": "Quick Note",
+      "description": "Bloc-notes rapide de l'enseignant",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["userId"]
+    }
+  }
+}
