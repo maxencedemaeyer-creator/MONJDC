@@ -19,6 +19,12 @@ interface AuthModalProps {
   onClose: () => void;
 }
 
+interface AuthErrorDetails {
+  code?: string;
+  message: string;
+  userFriendly: string;
+}
+
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const {
     loginWithEmail,
@@ -32,7 +38,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<AuthErrorDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -40,7 +46,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setAuthError(null);
     setSuccessMessage(null);
     setLoading(true);
 
@@ -53,7 +59,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         }, 800);
       } else {
         if (!displayName.trim()) {
-          setError('Veuillez saisir votre prénom ou nom.');
+          setAuthError({
+            message: 'Champ nom/prénom requis',
+            userFriendly: 'Veuillez saisir votre prénom ou nom.',
+          });
           setLoading(false);
           return;
         }
@@ -64,29 +73,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         }, 800);
       }
     } catch (err: any) {
-      console.error('Erreur authentification:', err);
-      let msg = 'Une erreur est survenue lors de la connexion.';
+      console.error('Erreur authentification Firebase détaillée:', {
+        code: err.code,
+        message: err.message,
+        name: err.name,
+      });
+
+      let userFriendly = 'Une erreur est survenue lors de l’authentification.';
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        msg = 'Email ou mot de passe incorrect.';
+        userFriendly = 'Email ou mot de passe incorrect.';
       } else if (err.code === 'auth/operation-not-allowed') {
-        msg = 'La méthode de connexion Email/Mot de passe ou Google n’est pas activée sur la console Firebase du projet "jdc-max". Activez "Email/Mot de passe" dans Firebase Console > Authentification > Sign-in method.';
+        userFriendly = 'Le fournisseur "Email/Mot de passe" est désactivé ou en attente d’activation sur le projet Firebase "jdc-max". Rendez-vous dans la console Firebase > Authentication > Sign-in method pour l’activer.';
       } else if (err.code === 'auth/email-already-in-use') {
-        msg = 'Cette adresse e-mail est déjà utilisée par un autre compte.';
+        userFriendly = 'Cette adresse e-mail est déjà associée à un compte.';
       } else if (err.code === 'auth/weak-password') {
-        msg = 'Le mot de passe doit contenir au moins 6 caractères.';
+        userFriendly = 'Le mot de passe doit comporter au moins 6 caractères.';
       } else if (err.code === 'auth/invalid-email') {
-        msg = 'Format d’adresse e-mail invalide.';
+        userFriendly = 'Format d’adresse e-mail invalide.';
+      } else if (err.code === 'auth/network-request-failed') {
+        userFriendly = 'Impossible de contacter le serveur Firebase. Vérifiez votre connexion internet.';
       } else if (err.message) {
-        msg = err.message;
+        userFriendly = err.message;
       }
-      setError(msg);
+
+      setAuthError({
+        code: err.code || 'UNKNOWN_ERROR',
+        message: err.message || 'Aucun message technique supplémentaire',
+        userFriendly,
+      });
     } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleLogin = async () => {
-    setError(null);
+    setAuthError(null);
     setLoading(true);
     try {
       await loginWithGoogle();
@@ -95,14 +116,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         onClose();
       }, 800);
     } catch (err: any) {
-      console.error('Erreur Google Login:', err);
+      console.error('Erreur Google Login Firebase détaillée:', {
+        code: err.code,
+        message: err.message,
+      });
+      let userFriendly = 'Impossible de se connecter avec Google.';
       if (err.code === 'auth/popup-blocked') {
-        setError('Le pop-up de connexion a été bloqué par votre navigateur.');
+        userFriendly = 'La fenêtre pop-up de connexion Google a été bloquée par votre navigateur.';
       } else if (err.code === 'auth/popup-closed-by-user') {
-        setError('La fenêtre de connexion Google a été fermée.');
-      } else {
-        setError(err.message || 'Impossible de se connecter avec Google.');
+        userFriendly = 'La fenêtre de connexion Google a été fermée avant la fin de l’authentification.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        userFriendly = 'Le fournisseur Google Sign-In n’est pas activé dans la console Firebase du projet "jdc-max".';
       }
+
+      setAuthError({
+        code: err.code || 'GOOGLE_AUTH_ERROR',
+        message: err.message || 'Erreur inconnue',
+        userFriendly,
+      });
     } finally {
       setLoading(false);
     }
@@ -217,10 +248,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 </span>
               </div>
 
-              {error && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2 animate-in fade-in">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{error}</span>
+              {authError && (
+                <div className="p-3.5 rounded-xl bg-rose-50/90 border border-rose-200 text-rose-900 text-xs space-y-2 animate-in fade-in">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1 flex-1">
+                      <p className="font-semibold text-rose-900 leading-snug">
+                        {authError.userFriendly}
+                      </p>
+                      {authError.code === 'auth/operation-not-allowed' && (
+                        <p className="text-[11px] text-rose-700 leading-relaxed bg-white/70 p-2 rounded-lg border border-rose-200/60 mt-1">
+                          💡 <strong>Comment résoudre :</strong> Connectez-vous sur{' '}
+                          <a
+                            href="https://console.firebase.google.com/project/jdc-max/authentication/providers"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline font-semibold text-indigo-700 hover:text-indigo-900"
+                          >
+                            Firebase Console (jdc-max &gt; Sign-in method)
+                          </a>
+                          , cliquez sur <strong>Email/Password</strong> et activez l’interrupteur, puis réessayez.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Exact technical error code & message */}
+                  <div className="pt-1.5 border-t border-rose-200/80 font-mono text-[10px] text-rose-700/90 flex flex-col gap-0.5 bg-rose-100/50 p-2 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-rose-800">Code d'erreur Firebase :</span>
+                      <span className="px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded font-bold">{authError.code}</span>
+                    </div>
+                    <div className="text-slate-600 truncate mt-0.5" title={authError.message}>
+                      {authError.message}
+                    </div>
+                  </div>
+
+                  {/* Fallback option */}
+                  <div className="pt-1 text-center">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                    >
+                      Continuer en mode Invité (sans synchronisation cloud)
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -319,7 +392,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                       type="button"
                       onClick={() => {
                         setMode('register');
-                        setError(null);
+                        setAuthError(null);
                       }}
                       className="font-semibold text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
                     >
@@ -333,7 +406,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                       type="button"
                       onClick={() => {
                         setMode('login');
-                        setError(null);
+                        setAuthError(null);
                       }}
                       className="font-semibold text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
                     >
