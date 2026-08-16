@@ -7,7 +7,7 @@ import { DashboardView } from './components/dashboard/DashboardView';
 import { JdcWeeklyView } from './components/jdc/JdcWeeklyView';
 import { TimetableConfigView } from './components/timetable/TimetableConfigView';
 import { ReferentielsView } from './components/referentiels/ReferentielsView';
-import { StudentsView } from './components/students/StudentsView';
+import { ClassesView } from './components/classes/ClassesView';
 import { EvaluationsView } from './components/evaluations/EvaluationsView';
 import { ExportInspectionView } from './components/export/ExportInspectionView';
 import { LessonModal } from './components/jdc/LessonModal';
@@ -148,7 +148,7 @@ const MainLayout: React.FC = () => {
 
           {activeTab === 'referentiels' && <ReferentielsView />}
 
-          {activeTab === 'students' && <StudentsView />}
+          {(activeTab === 'classes' || activeTab === 'students') && <ClassesView />}
 
           {activeTab === 'evaluations' && <EvaluationsView />}
 

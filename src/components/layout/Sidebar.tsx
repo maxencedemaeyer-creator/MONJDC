@@ -5,6 +5,7 @@ import {
   Clock,
   BookMarked,
   Users,
+  School,
   GraduationCap,
   FileCheck2,
   X,
@@ -22,6 +23,7 @@ export const Sidebar: React.FC = () => {
     activeTab,
     setActiveTab,
     referentiels,
+    classes,
     students,
     evaluations,
     jdcEntries,
@@ -67,11 +69,11 @@ export const Sidebar: React.FC = () => {
       badge: referentiels.length,
     },
     {
-      id: 'students',
-      label: 'Élèves & Aménagements',
-      description: 'Besoins spé., présences & PAP',
-      icon: Users,
-      badge: students.length,
+      id: 'classes',
+      label: 'Classes',
+      description: 'Gestion, élèves & import',
+      icon: School,
+      badge: classes.length,
     },
     {
       id: 'evaluations',
@@ -338,15 +340,15 @@ export const Sidebar: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveTab('students')}
+          onClick={() => setActiveTab('classes')}
           className={`flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl transition ${
-            activeTab === 'students'
+            activeTab === 'classes' || activeTab === 'students'
               ? 'text-indigo-600 font-semibold'
               : 'text-slate-500 hover:text-slate-800'
           }`}
         >
-          <Users className="w-5 h-5" />
-          <span className="text-[10px]">Élèves</span>
+          <School className="w-5 h-5" />
+          <span className="text-[10px]">Classes</span>
         </button>
 
         <button

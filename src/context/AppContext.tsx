@@ -51,6 +51,7 @@ export type NavigationTab =
   | 'schedule-config'
   | 'jdc'
   | 'referentiels'
+  | 'classes'
   | 'students'
   | 'evaluations'
   | 'export';
@@ -117,6 +118,9 @@ interface AppContextType {
 
   students: Student[];
   addStudent: (student: Omit<Student, 'id'>) => Promise<void>;
+  addMultipleStudents: (students: Omit<Student, 'id'>[]) => Promise<void>;
+  assignStudentsToClass: (studentIds: string[], targetClassId: string, mode: 'add' | 'transfer') => Promise<void>;
+  removeStudentFromClass: (studentId: string, classId: string) => Promise<void>;
   updateStudent: (id: string, student: Partial<Student>) => Promise<void>;
   deleteStudent: (id: string) => Promise<void>;
   setStudentAttendance: (id: string, status: Student['currentAttendance']) => Promise<void>;
@@ -678,14 +682,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // 7. Student Actions (Strict userId storage)
+  // 7. Student Actions (Strict userId storage & Multi-classes support)
   // =========================================================================
   const addStudent = async (student: Omit<Student, 'id'>) => {
     try {
       setIsSyncing(true);
       const docId = `stud-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+      const classIds = student.classIds && student.classIds.length > 0 
+        ? student.classIds 
+        : [student.classId];
       const payload: Student = {
         ...student,
+        classIds,
         id: docId,
       };
       await setDoc(doc(db, 'students', docId), {
@@ -695,10 +703,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       logFirestoreSuccess(`Élève ${student.firstName} ${student.lastName} ajouté`, docId);
 
-      // Increment class studentCount
-      const targetClass = classes.find((c) => c.id === student.classId);
-      if (targetClass) {
-        await updateClass(targetClass.id, { studentCount: (targetClass.studentCount || 0) + 1 });
+      // Increment studentCount for all assigned classes
+      for (const cId of classIds) {
+        const targetClass = classes.find((c) => c.id === cId);
+        if (targetClass) {
+          await updateClass(targetClass.id, { studentCount: (targetClass.studentCount || 0) + 1 });
+        }
       }
     } catch (err) {
       console.error('Erreur addStudent Firestore:', err);
@@ -708,11 +718,165 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const addMultipleStudents = async (newStudents: Omit<Student, 'id'>[]) => {
+    try {
+      setIsSyncing(true);
+      const batch = writeBatch(db);
+      const updatedClassCounts: Record<string, number> = {};
+
+      newStudents.forEach((student) => {
+        const docId = `stud-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+        const classIds = student.classIds && student.classIds.length > 0 
+          ? student.classIds 
+          : [student.classId];
+        const payload: Student = {
+          ...student,
+          classIds,
+          id: docId,
+        };
+        const studentRef = doc(db, 'students', docId);
+        batch.set(studentRef, {
+          ...payload,
+          userId: activeUserId,
+          updatedAt: new Date().toISOString(),
+        });
+
+        // Tally counts
+        classIds.forEach((cId) => {
+          updatedClassCounts[cId] = (updatedClassCounts[cId] || 0) + 1;
+        });
+      });
+
+      await batch.commit();
+      logFirestoreSuccess(`${newStudents.length} élèves importés avec succès`);
+
+      // Update class counts
+      for (const [cId, count] of Object.entries(updatedClassCounts)) {
+        const targetClass = classes.find((c) => c.id === cId);
+        if (targetClass) {
+          await updateClass(cId, { studentCount: (targetClass.studentCount || 0) + count });
+        }
+      }
+      addToast(`${newStudents.length} élèves importés avec succès`, undefined, 'success');
+    } catch (err) {
+      console.error('Erreur addMultipleStudents Firestore:', err);
+      addToast('Erreur lors de l’importation des élèves', undefined, 'error');
+      throw err;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const assignStudentsToClass = async (
+    studentIds: string[],
+    targetClassId: string,
+    mode: 'add' | 'transfer'
+  ) => {
+    try {
+      setIsSyncing(true);
+      const batch = writeBatch(db);
+      let modifiedCount = 0;
+
+      for (const sId of studentIds) {
+        const stud = students.find((s) => s.id === sId);
+        if (!stud) continue;
+
+        let nextClassIds: string[];
+        if (mode === 'add') {
+          const currentList = stud.classIds || (stud.classId ? [stud.classId] : []);
+          if (!currentList.includes(targetClassId)) {
+            nextClassIds = [...currentList, targetClassId];
+          } else {
+            nextClassIds = currentList;
+          }
+        } else {
+          // Transfer: replace with single targetClassId
+          nextClassIds = [targetClassId];
+        }
+
+        const studentRef = doc(db, 'students', sId);
+        batch.update(studentRef, {
+          classId: targetClassId,
+          classIds: nextClassIds,
+          userId: activeUserId,
+          updatedAt: new Date().toISOString(),
+        });
+        modifiedCount++;
+      }
+
+      await batch.commit();
+      logFirestoreSuccess(
+        mode === 'add'
+          ? `${modifiedCount} élève(s) assigné(s) à la classe`
+          : `${modifiedCount} élève(s) transféré(s) vers la classe`
+      );
+      addToast(
+        mode === 'add'
+          ? `${modifiedCount} élève(s) ajouté(s) en multi-classes`
+          : `${modifiedCount} élève(s) transféré(s) avec succès`,
+        undefined,
+        'success'
+      );
+    } catch (err) {
+      console.error('Erreur assignStudentsToClass Firestore:', err);
+      addToast('Erreur lors de l’assignation des élèves', undefined, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const removeStudentFromClass = async (studentId: string, classId: string) => {
+    try {
+      setIsSyncing(true);
+      const stud = students.find((s) => s.id === studentId);
+      if (!stud) return;
+
+      const currentList = stud.classIds || (stud.classId ? [stud.classId] : []);
+      const remainingList = currentList.filter((c) => c !== classId);
+
+      if (remainingList.length === 0) {
+        // No remaining classes, delete student
+        await deleteDoc(doc(db, 'students', studentId));
+        logFirestoreSuccess(`Élève retiré de la classe`, studentId);
+      } else {
+        // Still assigned to other classes
+        const nextPrimaryClass = remainingList[0];
+        await updateDoc(doc(db, 'students', studentId), {
+          classId: nextPrimaryClass,
+          classIds: remainingList,
+          userId: activeUserId,
+          updatedAt: new Date().toISOString(),
+        });
+        logFirestoreSuccess(`Élève retiré de la classe`, studentId);
+      }
+
+      // Decrement class count
+      const targetClass = classes.find((c) => c.id === classId);
+      if (targetClass) {
+        await updateClass(classId, { studentCount: Math.max(0, (targetClass.studentCount || 1) - 1) });
+      }
+      addToast('Élève retiré de la classe', studentId, 'info');
+    } catch (err) {
+      console.error('Erreur removeStudentFromClass Firestore:', err);
+      addToast('Erreur lors du retrait de l’élève', studentId, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const updateStudent = async (id: string, student: Partial<Student>) => {
     try {
       setIsSyncing(true);
+      const current = students.find((s) => s.id === id);
+      const classIds = student.classIds 
+        ? student.classIds 
+        : student.classId 
+        ? [student.classId] 
+        : current?.classIds;
+
       await updateDoc(doc(db, 'students', id), {
         ...student,
+        ...(classIds ? { classIds } : {}),
         userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
@@ -733,9 +897,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       logFirestoreSuccess(`Élève supprimé`, id);
 
       if (target) {
-        const targetClass = classes.find((c) => c.id === target.classId);
-        if (targetClass) {
-          await updateClass(targetClass.id, { studentCount: Math.max(0, (targetClass.studentCount || 1) - 1) });
+        const assignedClasses = target.classIds && target.classIds.length > 0 
+          ? target.classIds 
+          : [target.classId];
+        for (const cId of assignedClasses) {
+          const targetClass = classes.find((c) => c.id === cId);
+          if (targetClass) {
+            await updateClass(targetClass.id, { studentCount: Math.max(0, (targetClass.studentCount || 1) - 1) });
+          }
         }
       }
     } catch (err) {
@@ -1205,6 +1374,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteReferentiel,
         students,
         addStudent,
+        addMultipleStudents,
+        assignStudentsToClass,
+        removeStudentFromClass,
         updateStudent,
         deleteStudent,
         setStudentAttendance,

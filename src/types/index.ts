@@ -35,10 +35,14 @@ export interface TeacherProfile {
   activeClassId: string;
 }
 
+export type ClassLevel = 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6' | 'Maternelle' | 'Secondaire' | 'Autre';
+
 export interface ClassGroup {
   id: string;
   name: string; // e.g., "3e Primaire A"
   cycle: EducationCycle;
+  level?: ClassLevel; // P1 à P6
+  description?: string; // Description de la classe
   room: string;
   academicYear: string;
   studentCount: number;
@@ -58,7 +62,8 @@ export type ReasonableAdjustmentType =
 
 export interface Student {
   id: string;
-  classId: string;
+  classId: string; // Classe principale
+  classIds?: string[]; // Multi-classes support (toutes les classes où l'élève est inscrit)
   firstName: string;
   lastName: string;
   gender: 'M' | 'F' | 'X';

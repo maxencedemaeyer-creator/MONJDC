@@ -60,7 +60,9 @@ export const EvaluationsView: React.FC = () => {
     'Citoyenneté & Philosophie',
   ];
 
-  const classStudents = students.filter((s) => !activeClassId || s.classId === activeClassId);
+  const classStudents = students.filter(
+    (s) => !activeClassId || s.classId === activeClassId || (s.classIds && s.classIds.includes(activeClassId))
+  );
 
   const filteredEvaluations = evaluations.filter((e) => {
     const matchesClass = !activeClassId || e.classId === activeClassId;

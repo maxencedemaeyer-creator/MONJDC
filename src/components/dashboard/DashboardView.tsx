@@ -50,7 +50,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenLessonModal,
   );
 
   // Calculate statistics
-  const totalStudents = students.filter((s) => !activeClass || s.classId === activeClass.id);
+  const totalStudents = students.filter(
+    (s) => !activeClass || s.classId === activeClass.id || (s.classIds && s.classIds.includes(activeClass.id))
+  );
   const studentsWithNeeds = totalStudents.filter((s) => s.specialNeeds && s.specialNeeds.length > 0);
   const completedLessons = todayLessons.filter((l) => l.status === 'completed');
   const distinctCompetenciesCovered = new Set(
@@ -419,10 +421,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenLessonModal,
                 Élèves à besoins spécifiques ({studentsWithNeeds.length})
               </h3>
               <button
-                onClick={() => setActiveTab('students')}
-                className="text-xs text-indigo-600 font-semibold"
+                onClick={() => setActiveTab('classes')}
+                className="text-xs text-indigo-600 font-semibold hover:text-indigo-800"
               >
-                Détails
+                Gérer les classes
               </button>
             </div>
 
