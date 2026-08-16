@@ -1,26 +1,43 @@
-export const INITIAL_DAILY_NOTES: DailyNote[] = [
-  {
-    id: 'note-01',
-    date: '2026-08-16',
-    title: 'Visite de l’Inspecteur Pédagogique FWB',
-    content: 'Passage prévu mardi 26 août pour la revue du journal de classe et l’alignement avec le tronc commun P3-P4.',
-    isImportant: true,
-    category: 'rappel',
-  },
-  {
-    id: 'note-02',
-    date: '2026-08-17',
-    title: 'Réunion de concertation interdisciplinaire (P3/P4)',
-    content: 'Point sur les aménagements raisonnables de Lucas (Dyslexie) et Emma (TDAH) avec la logopède.',
-    isImportant: false,
-    category: 'reunion',
-  },
-  {
-    id: 'note-03',
-    date: '2026-08-18',
-    title: 'Sortie éducative : Musée des Sciences Naturelles',
-    content: 'Rappeler aux parents de signer l’autorisation dans le journal de classe pour vendredi.',
-    isImportant: true,
-    category: 'materiel',
-  },
-];
+name: MonJDC Automated Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+
+      - name: Deploy to Firebase Hosting (Optional)
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        if: ${{ env.FIREBASE_SERVICE_ACCOUNT != '' }}
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: '${{ secrets.VITE_FIREBASE_PROJECT_ID }}'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
