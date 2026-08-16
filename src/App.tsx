@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Flame, CheckCircle, Info, AlertTriangle, X } from 'lucide-react';
+import { Flame, Info, AlertTriangle, X, Loader2, BookOpen } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
@@ -11,6 +11,7 @@ import { StudentsView } from './components/students/StudentsView';
 import { EvaluationsView } from './components/evaluations/EvaluationsView';
 import { ExportInspectionView } from './components/export/ExportInspectionView';
 import { LessonModal } from './components/jdc/LessonModal';
+import { AuthModal } from './components/auth/AuthModal';
 import { JdcEntry } from './types';
 
 const ToastContainer: React.FC = () => {
@@ -19,7 +20,7 @@ const ToastContainer: React.FC = () => {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    <div className="fixed bottom-16 lg:bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-2 sm:px-0">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -66,7 +67,13 @@ const ToastContainer: React.FC = () => {
 };
 
 const MainLayout: React.FC = () => {
-  const { activeTab, setActiveTab } = useApp();
+  const {
+    activeTab,
+    setActiveTab,
+    isAuthModalOpen,
+    setIsAuthModalOpen,
+    isAuthLoading,
+  } = useApp();
   const [selectedLessonForModal, setSelectedLessonForModal] = useState<JdcEntry | null>(null);
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
 
@@ -85,6 +92,35 @@ const MainLayout: React.FC = () => {
     setActiveTab('export');
   };
 
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 selection:bg-indigo-500 selection:text-white">
+        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
+          <div className="relative">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-xl shadow-indigo-500/30 ring-4 ring-indigo-500/20">
+              <BookOpen className="w-8 h-8 text-white" />
+            </div>
+            <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-amber-500 border-2 border-slate-900 flex items-center justify-center">
+              <Flame className="w-3.5 h-3.5 text-white fill-white animate-pulse" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-white">
+              MonJDC • Journal de Classe
+            </h1>
+            <p className="text-xs text-slate-400">
+              Tronc Commun FWB • Synchronisation Firebase
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-indigo-400 text-xs font-semibold mt-4">
+            <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+            <span>Vérification de la session en cours...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
       {/* Top Navigation with Flame & Live Connection Indicator */}
@@ -92,11 +128,11 @@ const MainLayout: React.FC = () => {
 
       {/* Main Container */}
       <div className="flex-1 flex flex-col lg:flex-row">
-        {/* Navigation Sidebar */}
+        {/* Navigation Sidebar & Mobile Drawer/Bar */}
         <Sidebar />
 
-        {/* Dynamic Content View */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto max-w-7xl w-full mx-auto">
+        {/* Dynamic Content View with bottom padding for mobile bar */}
+        <main className="flex-1 p-3 sm:p-5 lg:p-8 pb-24 lg:pb-8 overflow-y-auto max-w-7xl w-full mx-auto">
           {activeTab === 'dashboard' && (
             <DashboardView
               onOpenLessonModal={handleOpenNewLesson}
@@ -126,6 +162,12 @@ const MainLayout: React.FC = () => {
         onClose={() => setIsLessonModalOpen(false)}
         entry={selectedLessonForModal}
         onPrintLesson={handleOpenPrintSheet}
+      />
+
+      {/* Firebase Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
       />
 
       {/* Real-time Firestore Toast Feed */}

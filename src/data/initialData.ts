@@ -11,11 +11,11 @@ import {
 
 export const INITIAL_TEACHER_PROFILE: TeacherProfile = {
   id: 'teacher-01',
-  name: 'Mme Sophie Vanderberg',
-  email: 'sophie.vanderberg@ecole-stjoseph.be',
+  name: 'Maxence',
+  email: 'maxence.de.maeyer@gmail.com',
   schoolName: 'École Fondamentale Saint-Joseph (FWB / SeGEC)',
   schoolYear: '2025-2026',
-  role: 'Institutrice Primaire Titulaire',
+  role: 'Enseignant Primaire Titulaire',
   selectedCycle: 'P3-P4',
   activeClassId: 'class-3a',
 };

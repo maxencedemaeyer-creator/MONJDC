@@ -7,7 +7,19 @@ import {
   deleteDoc,
   onSnapshot,
   writeBatch,
+  query,
+  where,
 } from 'firebase/firestore';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  updateProfile as updateAuthProfile,
+  type User,
+} from 'firebase/auth';
 import {
   TeacherProfile,
   ClassGroup,
@@ -23,16 +35,15 @@ import {
 } from '../types';
 import { INITIAL_REFERENTIELS } from '../data/referentielsSeGEC';
 import {
-  INITIAL_TEACHER_PROFILE,
-  INITIAL_CLASSES,
   INITIAL_TIME_SLOTS,
+  INITIAL_CLASSES,
   INITIAL_DEFAULT_SLOTS,
   INITIAL_STUDENTS,
   getSampleJdcEntries,
   INITIAL_EVALUATIONS,
   INITIAL_DAILY_NOTES,
 } from '../data/initialData';
-import { db, isFirebaseConfigured, currentProjectId, currentDatabaseId } from '../lib/firebase';
+import { db, auth, isFirebaseConfigured, currentProjectId, currentDatabaseId } from '../lib/firebase';
 import { getWeekDates } from '../lib/utils';
 
 export type NavigationTab =
@@ -47,8 +58,8 @@ export type NavigationTab =
 export interface ToastMessage {
   id: string;
   message: string;
-  type: 'success' | 'info' | 'error';
   docId?: string;
+  type: 'success' | 'info' | 'error';
   timestamp: number;
 }
 
@@ -59,6 +70,20 @@ interface AppContextType {
   activeClassId: string;
   setActiveClassId: (id: string) => void;
   activeClass: ClassGroup | undefined;
+
+  // Mobile Drawer & Navigation
+  isMobileMenuOpen: boolean;
+  setIsMobileMenuOpen: (open: boolean) => void;
+
+  // Firebase Auth State
+  currentUser: User | null;
+  isAuthLoading: boolean;
+  isAuthModalOpen: boolean;
+  setIsAuthModalOpen: (open: boolean) => void;
+  loginWithEmail: (email: string, pass: string) => Promise<void>;
+  registerWithEmail: (email: string, pass: string, name: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
 
   // Week selection
   currentReferenceDate: Date;
@@ -76,6 +101,7 @@ interface AppContextType {
   classes: ClassGroup[];
   addClass: (cls: Omit<ClassGroup, 'id'>) => Promise<void>;
   updateClass: (id: string, cls: Partial<ClassGroup>) => Promise<void>;
+  deleteClass: (id: string) => Promise<void>;
 
   timeSlots: TimeSlotConfig[];
   updateTimeSlots: (slots: TimeSlotConfig[]) => void;
@@ -130,8 +156,6 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const CURRENT_USER_ID = 'teacher-01';
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [currentReferenceDate, setCurrentReferenceDate] = useState<Date>(new Date());
@@ -141,23 +165,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeWeekDays = getWeekDates(currentReferenceDate);
   const activeWeekMondayStr = activeWeekDays[0]?.dateStr || '';
 
-  // Data states (synchronized via Firestore onSnapshot)
-  const [profile, setProfile] = useState<TeacherProfile>(INITIAL_TEACHER_PROFILE);
-  const [classes, setClasses] = useState<ClassGroup[]>(INITIAL_CLASSES);
-  const [activeClassId, setActiveClassIdState] = useState<string>('class-3a');
+  // Firebase Auth State & Loading
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+
+  // Derive dynamic user ID
+  const activeUserId = currentUser ? currentUser.uid : 'guest-teacher';
+
+  // Dynamic initial profile based on authenticated user or guest
+  const getInitialProfile = (user: User | null): TeacherProfile => {
+    const name = user?.displayName || (user?.email ? user.email.split('@')[0] : 'Enseignant');
+    const email = user?.email || 'enseignant@ecole.be';
+    return {
+      id: user?.uid || 'guest-teacher',
+      name,
+      email,
+      schoolName: 'École Fondamentale (FWB / SeGEC)',
+      schoolYear: '2025-2026',
+      role: 'Enseignant Titulaire',
+      selectedCycle: 'P3-P4',
+      activeClassId: '',
+    };
+  };
+
+  // Data states (synchronized via Firestore onSnapshot strictly filtered by userId)
+  const [profile, setProfile] = useState<TeacherProfile>(() => getInitialProfile(null));
+  const [classes, setClasses] = useState<ClassGroup[]>([]);
+  const [activeClassId, setActiveClassIdState] = useState<string>('');
   const [timeSlots, setTimeSlots] = useState<TimeSlotConfig[]>(INITIAL_TIME_SLOTS);
-  const [defaultSlots, setDefaultSlots] = useState<DefaultSlotAssignment[]>(INITIAL_DEFAULT_SLOTS);
+  const [defaultSlots, setDefaultSlots] = useState<DefaultSlotAssignment[]>([]);
   const [referentiels, setReferentiels] = useState<ReferentielItem[]>(INITIAL_REFERENTIELS);
-  const [students, setStudents] = useState<Student[]>(INITIAL_STUDENTS);
-  const [jdcEntries, setJdcEntries] = useState<JdcEntry[]>(() => getSampleJdcEntries(activeWeekMondayStr));
-  const [evaluations, setEvaluations] = useState<Evaluation[]>(INITIAL_EVALUATIONS);
-  const [dailyNotes, setDailyNotes] = useState<DailyNote[]>(INITIAL_DAILY_NOTES);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [jdcEntries, setJdcEntries] = useState<JdcEntry[]>([]);
+  const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
+  const [dailyNotes, setDailyNotes] = useState<DailyNote[]>([]);
   const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
 
   // Firestore sync indicator & toasts
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  // Mobile Drawer State
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+
+  // Toast Helpers
   const addToast = useCallback((message: string, docId?: string, type: 'success' | 'info' | 'error' = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
     setToasts((prev) => [...prev.slice(-4), { id, message, docId, type, timestamp: Date.now() }]);
@@ -175,131 +227,182 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast(`${action}`, docId, 'success');
   }, [addToast]);
 
-  // Track if initial seeding happened during this session
-  const isInitializedRef = useRef(false);
-
   // =========================================================================
-  // Real-time Firestore Listeners (onSnapshot)
+  // 1. Listen to Firebase Auth state
   // =========================================================================
   useEffect(() => {
-    if (!db) return;
+    if (!auth) {
+      setIsAuthLoading(false);
+      return;
+    }
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (user) {
+        const dynamicName = user.displayName || (user.email ? user.email.split('@')[0] : 'Enseignant');
+        const dynamicEmail = user.email || '';
+        setProfile((prev) => ({
+          ...prev,
+          id: user.uid,
+          name: dynamicName,
+          email: dynamicEmail,
+        }));
+      } else {
+        // Reset profile to clean guest state
+        setProfile(getInitialProfile(null));
+      }
+      setIsAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
-    // 1. JDC Entries Listener
+  // Auth Operations
+  const loginWithEmail = async (emailStr: string, passStr: string) => {
+    if (!auth) throw new Error('Firebase Auth non disponible');
+    await signInWithEmailAndPassword(auth, emailStr, passStr);
+  };
+
+  const registerWithEmail = async (emailStr: string, passStr: string, nameStr: string) => {
+    if (!auth) throw new Error('Firebase Auth non disponible');
+    const userCredential = await createUserWithEmailAndPassword(auth, emailStr, passStr);
+    if (userCredential.user && nameStr) {
+      await updateAuthProfile(userCredential.user, { displayName: nameStr });
+      setProfile((prev) => ({
+        ...prev,
+        id: userCredential.user.uid,
+        name: nameStr,
+        email: emailStr,
+      }));
+    }
+  };
+
+  const loginWithGoogle = async () => {
+    if (!auth) throw new Error('Firebase Auth non disponible');
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  };
+
+  const logout = async () => {
+    if (!auth) return;
+    await signOut(auth);
+    // Clear all in-memory user collections cleanly
+    setClasses([]);
+    setActiveClassIdState('');
+    setStudents([]);
+    setJdcEntries([]);
+    setEvaluations([]);
+    setDefaultSlots([]);
+    setDailyNotes([]);
+    setProfile(getInitialProfile(null));
+    addToast('Déconnexion réussie', undefined, 'info');
+  };
+
+  // =========================================================================
+  // 2. Real-time Firestore Listeners (Strictly filtered by activeUserId)
+  // =========================================================================
+  useEffect(() => {
+    if (!db || isAuthLoading) return;
+
+    // 1. JDC Entries Listener: strictly filter by userId
+    const qJdc = query(collection(db, 'jdc_entries'), where('userId', '==', activeUserId));
     const unsubJdc = onSnapshot(
-      collection(db, 'jdc_entries'),
+      qJdc,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: JdcEntry[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as JdcEntry;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setJdcEntries(items);
-        } else if (!isInitializedRef.current) {
-          // Seed initial entries on first load if collection is empty
-          seedInitialJdcEntries(activeWeekMondayStr);
-        }
+        const items: JdcEntry[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as JdcEntry;
+          items.push({ ...data, id: docSnap.id });
+        });
+        setJdcEntries(items);
       },
       (error) => {
         console.warn('Firestore onSnapshot jdc_entries notice:', error.message);
       }
     );
 
-    // 2. Students Listener
+    // 2. Students Listener: strictly filter by userId
+    const qStudents = query(collection(db, 'students'), where('userId', '==', activeUserId));
     const unsubStudents = onSnapshot(
-      collection(db, 'students'),
+      qStudents,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: Student[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as Student;
-            items.push({ ...data, id: docSnap.id });
-          });
-          // Sort alphabetically by lastName
-          items.sort((a, b) => a.lastName.localeCompare(b.lastName));
-          setStudents(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialStudents();
-        }
+        const items: Student[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Student;
+          items.push({ ...data, id: docSnap.id });
+        });
+        items.sort((a, b) => a.lastName.localeCompare(b.lastName));
+        setStudents(items);
       },
       (error) => {
         console.warn('Firestore onSnapshot students notice:', error.message);
       }
     );
 
-    // 3. Evaluations Listener
+    // 3. Evaluations Listener: strictly filter by userId
+    const qEvals = query(collection(db, 'evaluations'), where('userId', '==', activeUserId));
     const unsubEvals = onSnapshot(
-      collection(db, 'evaluations'),
+      qEvals,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: Evaluation[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as Evaluation;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setEvaluations(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialEvaluations();
-        }
+        const items: Evaluation[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Evaluation;
+          items.push({ ...data, id: docSnap.id });
+        });
+        setEvaluations(items);
       },
       (error) => {
         console.warn('Firestore onSnapshot evaluations notice:', error.message);
       }
     );
 
-    // 4. Schedule (Timetable) Listener
+    // 4. Schedule (Timetable) Listener: strictly filter by userId
+    const qSchedule = query(collection(db, 'schedule'), where('userId', '==', activeUserId));
     const unsubSchedule = onSnapshot(
-      collection(db, 'schedule'),
+      qSchedule,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: DefaultSlotAssignment[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as DefaultSlotAssignment;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setDefaultSlots(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialSchedule();
-        }
+        const items: DefaultSlotAssignment[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as DefaultSlotAssignment;
+          items.push({ ...data, id: docSnap.id });
+        });
+        setDefaultSlots(items);
       },
       (error) => {
         console.warn('Firestore onSnapshot schedule notice:', error.message);
       }
     );
 
-    // 5. Daily Notes Listener
+    // 5. Daily Notes Listener: strictly filter by userId
+    const qNotes = query(collection(db, 'notes'), where('userId', '==', activeUserId));
     const unsubNotes = onSnapshot(
-      collection(db, 'notes'),
+      qNotes,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: DailyNote[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as DailyNote;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setDailyNotes(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialNotes();
-        }
+        const items: DailyNote[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as DailyNote;
+          items.push({ ...data, id: docSnap.id });
+        });
+        setDailyNotes(items);
       },
       (error) => {
         console.warn('Firestore onSnapshot notes notice:', error.message);
       }
     );
 
-    // 6. Classes Listener
+    // 6. Classes Listener: strictly filter by userId
+    const qClasses = query(collection(db, 'classes'), where('userId', '==', activeUserId));
     const unsubClasses = onSnapshot(
-      collection(db, 'classes'),
+      qClasses,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: ClassGroup[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as ClassGroup;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setClasses(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialClasses();
+        const items: ClassGroup[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as ClassGroup;
+          items.push({ ...data, id: docSnap.id });
+        });
+        setClasses(items);
+        if (items.length > 0) {
+          setActiveClassIdState((prev) => (items.some((c) => c.id === prev) ? prev : items[0].id));
+        } else {
+          setActiveClassIdState('');
         }
       },
       (error) => {
@@ -307,36 +410,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
 
-    // 7. Referentiels Listener
+    // 7. Custom Referentiels Listener: filtered by userId
+    const qReferentiels = query(collection(db, 'referentiels'), where('userId', '==', activeUserId));
     const unsubReferentiels = onSnapshot(
-      collection(db, 'referentiels'),
+      qReferentiels,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const items: ReferentielItem[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as ReferentielItem;
-            items.push({ ...data, id: docSnap.id });
-          });
-          setReferentiels(items);
-        } else if (!isInitializedRef.current) {
-          seedInitialReferentiels();
-        }
+        const customItems: ReferentielItem[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as ReferentielItem;
+          customItems.push({ ...data, id: docSnap.id });
+        });
+        // Merge standard SeGEC/FWB referentiels with user's custom competencies
+        const customIds = new Set(customItems.map((c) => c.id));
+        const merged = [...customItems, ...INITIAL_REFERENTIELS.filter((r) => !customIds.has(r.id))];
+        setReferentiels(merged);
       },
       (error) => {
         console.warn('Firestore onSnapshot referentiels notice:', error.message);
       }
     );
 
-    // 8. Teacher Profile Listener
+    // 8. Teacher Profile Listener: doc(db, 'teacher_profile', activeUserId)
     const unsubProfile = onSnapshot(
-      doc(db, 'teacher_profile', CURRENT_USER_ID),
+      doc(db, 'teacher_profile', activeUserId),
       (docSnap) => {
         if (docSnap.exists()) {
           setProfile(docSnap.data() as TeacherProfile);
-        } else if (!isInitializedRef.current) {
-          setDoc(doc(db, 'teacher_profile', CURRENT_USER_ID), {
-            ...INITIAL_TEACHER_PROFILE,
-            userId: CURRENT_USER_ID,
+        } else if (currentUser) {
+          // Initialize user's personal teacher profile doc
+          const fresh = getInitialProfile(currentUser);
+          setDoc(doc(db, 'teacher_profile', activeUserId), {
+            ...fresh,
+            userId: activeUserId,
             updatedAt: new Date().toISOString(),
           }).catch(console.error);
         }
@@ -345,8 +450,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Firestore onSnapshot teacher_profile notice:', error.message);
       }
     );
-
-    isInitializedRef.current = true;
 
     return () => {
       unsubJdc();
@@ -358,137 +461,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubReferentiels();
       unsubProfile();
     };
-  }, [activeWeekMondayStr]);
-
-  // =========================================================================
-  // Seeding Helpers for Initial Data directly into Firestore
-  // =========================================================================
-  const seedInitialJdcEntries = async (mondayStr: string) => {
-    try {
-      const sampleEntries = getSampleJdcEntries(mondayStr);
-      const batch = writeBatch(db);
-      sampleEntries.forEach((entry) => {
-        const docRef = doc(db, 'jdc_entries', entry.id);
-        batch.set(docRef, {
-          ...entry,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-jdc (${sampleEntries.length} leçons)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore JDC:', err);
-    }
-  };
-
-  const seedInitialStudents = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_STUDENTS.forEach((student) => {
-        const docRef = doc(db, 'students', student.id);
-        batch.set(docRef, {
-          ...student,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-students (${INITIAL_STUDENTS.length} élèves)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Students:', err);
-    }
-  };
-
-  const seedInitialEvaluations = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_EVALUATIONS.forEach((evaluation) => {
-        const docRef = doc(db, 'evaluations', evaluation.id);
-        batch.set(docRef, {
-          ...evaluation,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-evals (${INITIAL_EVALUATIONS.length} évaluations)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Evals:', err);
-    }
-  };
-
-  const seedInitialSchedule = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_DEFAULT_SLOTS.forEach((slot) => {
-        const docRef = doc(db, 'schedule', slot.id);
-        batch.set(docRef, {
-          ...slot,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-schedule (${INITIAL_DEFAULT_SLOTS.length} créneaux)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Schedule:', err);
-    }
-  };
-
-  const seedInitialNotes = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_DAILY_NOTES.forEach((note) => {
-        const docRef = doc(db, 'notes', note.id);
-        batch.set(docRef, {
-          ...note,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-notes (${INITIAL_DAILY_NOTES.length} notes)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Notes:', err);
-    }
-  };
-
-  const seedInitialClasses = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_CLASSES.forEach((cls) => {
-        const docRef = doc(db, 'classes', cls.id);
-        batch.set(docRef, {
-          ...cls,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-classes (${INITIAL_CLASSES.length} classes)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Classes:', err);
-    }
-  };
-
-  const seedInitialReferentiels = async () => {
-    try {
-      const batch = writeBatch(db);
-      INITIAL_REFERENTIELS.forEach((ref) => {
-        const docRef = doc(db, 'referentiels', ref.id);
-        batch.set(docRef, {
-          ...ref,
-          userId: CURRENT_USER_ID,
-          updatedAt: new Date().toISOString(),
-        });
-      });
-      await batch.commit();
-      console.log("Donnée enregistrée sur Firestore avec succès :", `batch-initial-referentiels (${INITIAL_REFERENTIELS.length} compétences)`);
-    } catch (err) {
-      console.error('Erreur initialisation Firestore Referentiels:', err);
-    }
-  };
+  }, [activeUserId, isAuthLoading]);
 
   const activeClass = classes.find((c) => c.id === activeClassId) || classes[0];
 
@@ -517,15 +490,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Profile Actions (Firestore Direct)
+  // 3. Profile Actions (Strict userId storage)
   // =========================================================================
   const updateProfile = async (updated: Partial<TeacherProfile>) => {
     try {
       setIsSyncing(true);
-      const merged = { ...profile, ...updated, userId: CURRENT_USER_ID, updatedAt: new Date().toISOString() };
+      const merged = { ...profile, ...updated, userId: activeUserId, updatedAt: new Date().toISOString() };
       setProfile(merged);
-      await setDoc(doc(db, 'teacher_profile', CURRENT_USER_ID), merged, { merge: true });
-      logFirestoreSuccess('Profil enseignant mis à jour', CURRENT_USER_ID);
+      await setDoc(doc(db, 'teacher_profile', activeUserId), merged, { merge: true });
+      logFirestoreSuccess('Profil enseignant mis à jour', activeUserId);
     } catch (err) {
       console.error('Erreur updateProfile Firestore:', err);
       addToast('Erreur lors de la sauvegarde du profil', undefined, 'error');
@@ -535,7 +508,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Class Actions (Firestore Direct)
+  // 4. Class Actions (Strict userId storage)
   // =========================================================================
   const addClass = async (cls: Omit<ClassGroup, 'id'>) => {
     try {
@@ -547,7 +520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'classes', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Classe ${cls.name} créée`, docId);
@@ -565,7 +538,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'classes', id), {
         ...updated,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Classe mise à jour`, id);
@@ -577,8 +550,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const deleteClass = async (id: string) => {
+    try {
+      setIsSyncing(true);
+      await deleteDoc(doc(db, 'classes', id));
+      logFirestoreSuccess(`Classe supprimée`, id);
+    } catch (err) {
+      console.error('Erreur deleteClass Firestore:', err);
+      addToast('Erreur suppression classe', id, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // =========================================================================
-  // Timetable Slot Actions (Firestore Direct: 'schedule')
+  // 5. Timetable Slot Actions (Strict userId storage)
   // =========================================================================
   const updateTimeSlots = (slots: TimeSlotConfig[]) => {
     setTimeSlots(slots);
@@ -594,7 +580,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'schedule', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Créneau ${slot.subjectTitle} ajouté à la grille`, docId);
@@ -611,7 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'schedule', id), {
         ...slot,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Créneau mis à jour`, id);
@@ -637,7 +623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Referentiel Actions (Firestore Direct: 'referentiels')
+  // 6. Referentiel Actions (Strict userId storage)
   // =========================================================================
   const addReferentiel = async (item: Omit<ReferentielItem, 'id'>) => {
     try {
@@ -649,7 +635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'referentiels', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Compétence ${item.code} enregistrée`, docId);
@@ -666,7 +652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'referentiels', id), {
         ...item,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Compétence mise à jour`, id);
@@ -692,7 +678,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Student Actions (Firestore Direct: 'students')
+  // 7. Student Actions (Strict userId storage)
   // =========================================================================
   const addStudent = async (student: Omit<Student, 'id'>) => {
     try {
@@ -704,7 +690,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'students', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Élève ${student.firstName} ${student.lastName} ajouté`, docId);
@@ -712,7 +698,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Increment class studentCount
       const targetClass = classes.find((c) => c.id === student.classId);
       if (targetClass) {
-        await updateClass(targetClass.id, { studentCount: targetClass.studentCount + 1 });
+        await updateClass(targetClass.id, { studentCount: (targetClass.studentCount || 0) + 1 });
       }
     } catch (err) {
       console.error('Erreur addStudent Firestore:', err);
@@ -727,7 +713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'students', id), {
         ...student,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Fiche élève mise à jour`, id);
@@ -749,7 +735,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (target) {
         const targetClass = classes.find((c) => c.id === target.classId);
         if (targetClass) {
-          await updateClass(targetClass.id, { studentCount: Math.max(0, targetClass.studentCount - 1) });
+          await updateClass(targetClass.id, { studentCount: Math.max(0, (targetClass.studentCount || 1) - 1) });
         }
       }
     } catch (err) {
@@ -764,7 +750,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await updateDoc(doc(db, 'students', id), {
         currentAttendance: status,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Présence mise à jour`, id);
@@ -775,7 +761,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // JDC Entry Actions (Firestore Direct: 'jdc_entries')
+  // 8. JDC Entry Actions (Strict userId storage)
   // =========================================================================
   const addJdcEntry = async (entry: Omit<JdcEntry, 'id'>): Promise<JdcEntry> => {
     try {
@@ -788,7 +774,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       await setDoc(doc(db, 'jdc_entries', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Séance "${entry.lessonTitle}" enregistrée`, docId);
@@ -808,7 +794,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'jdc_entries', id), {
         ...entry,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Séance mise à jour`, id);
@@ -853,7 +839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'jdc_entries', newDocId), {
         ...duplicated,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Séance dupliquée vers Période ${targetPeriod}`, newDocId);
@@ -875,7 +861,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         date: targetDayObj.dateStr,
         dayOfWeek: targetDay,
         periodNumber: targetPeriod,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Séance déplacée vers le ${targetDayObj.label}`, id);
@@ -887,7 +873,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Populate week automatically from schedule slots directly with Firestore writeBatch
+  // Populate week automatically from user's schedule slots directly with Firestore writeBatch
   const populateWeekFromSchedule = async () => {
     try {
       setIsSyncing(true);
@@ -910,7 +896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const newDocId = `jdc-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
             const newEntry: JdcEntry = {
               id: newDocId,
-              userId: CURRENT_USER_ID,
+              userId: activeUserId,
               classId: slot.classId,
               date: day.dateStr,
               dayOfWeek: slot.dayOfWeek,
@@ -976,7 +962,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Evaluation Actions (Firestore Direct: 'evaluations')
+  // 9. Evaluation Actions (Strict userId storage)
   // =========================================================================
   const addEvaluation = async (evalItem: Omit<Evaluation, 'id'>) => {
     try {
@@ -988,7 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'evaluations', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Évaluation "${evalItem.title}" enregistrée`, docId);
@@ -1005,7 +991,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'evaluations', id), {
         ...evalItem,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Évaluation mise à jour`, id);
@@ -1044,7 +1030,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await updateDoc(doc(db, 'evaluations', evalId), {
         grades: updatedGrades,
         comments: updatedComments,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Notes et appréciations enregistrées`, evalId);
@@ -1057,7 +1043,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // Daily Notes Actions (Firestore Direct: 'notes')
+  // 10. Daily Notes Actions (Strict userId storage)
   // =========================================================================
   const addDailyNote = async (note: Omit<DailyNote, 'id'>) => {
     try {
@@ -1069,7 +1055,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await setDoc(doc(db, 'notes', docId), {
         ...payload,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Note enregistrée`, docId);
@@ -1086,7 +1072,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncing(true);
       await updateDoc(doc(db, 'notes', id), {
         ...note,
-        userId: CURRENT_USER_ID,
+        userId: activeUserId,
         updatedAt: new Date().toISOString(),
       });
       logFirestoreSuccess(`Note mise à jour`, id);
@@ -1111,22 +1097,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Re-seed all collections on demand
+  // =========================================================================
+  // 11. Explicit On-Demand Demo Data Seeding (With current user's userId)
+  // =========================================================================
   const resetAllToInitial = async () => {
     try {
       setIsSyncing(true);
-      await Promise.all([
-        seedInitialJdcEntries(activeWeekMondayStr),
-        seedInitialStudents(),
-        seedInitialEvaluations(),
-        seedInitialSchedule(),
-        seedInitialNotes(),
-        seedInitialClasses(),
-        seedInitialReferentiels(),
-      ]);
-      addToast('Base de données Firestore réinitialisée avec le programme FWB.', undefined, 'success');
+      const batch = writeBatch(db);
+
+      // Classes
+      INITIAL_CLASSES.forEach((cls) => {
+        const docRef = doc(db, 'classes', cls.id);
+        batch.set(docRef, { ...cls, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Schedule slots
+      INITIAL_DEFAULT_SLOTS.forEach((slot) => {
+        const docRef = doc(db, 'schedule', slot.id);
+        batch.set(docRef, { ...slot, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Students
+      INITIAL_STUDENTS.forEach((stud) => {
+        const docRef = doc(db, 'students', stud.id);
+        batch.set(docRef, { ...stud, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Sample JDC Entries for the active week
+      const samples = getSampleJdcEntries(activeWeekMondayStr);
+      samples.forEach((entry) => {
+        const docRef = doc(db, 'jdc_entries', entry.id);
+        batch.set(docRef, { ...entry, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Evaluations
+      INITIAL_EVALUATIONS.forEach((evaluation) => {
+        const docRef = doc(db, 'evaluations', evaluation.id);
+        batch.set(docRef, { ...evaluation, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Daily notes
+      INITIAL_DAILY_NOTES.forEach((note) => {
+        const docRef = doc(db, 'notes', note.id);
+        batch.set(docRef, { ...note, userId: activeUserId, updatedAt: new Date().toISOString() });
+      });
+
+      // Profile
+      const profileDoc = doc(db, 'teacher_profile', activeUserId);
+      batch.set(profileDoc, {
+        ...profile,
+        activeClassId: 'class-3a',
+        userId: activeUserId,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+
+      await batch.commit();
+      addToast('Données de démonstration FWB chargées avec succès dans votre espace.', undefined, 'success');
     } catch (err) {
       console.error('Erreur réinitialisation globale Firestore:', err);
+      addToast('Erreur lors du chargement des exemples', undefined, 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -1140,6 +1169,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeClassId,
         setActiveClassId,
         activeClass,
+        isMobileMenuOpen,
+        setIsMobileMenuOpen,
+        currentUser,
+        isAuthLoading,
+        isAuthModalOpen,
+        setIsAuthModalOpen,
+        loginWithEmail,
+        registerWithEmail,
+        loginWithGoogle,
+        logout,
         currentReferenceDate,
         activeWeekMondayStr,
         activeWeekDays,
@@ -1153,6 +1192,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         classes,
         addClass,
         updateClass,
+        deleteClass,
         timeSlots,
         updateTimeSlots,
         defaultSlots,

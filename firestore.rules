@@ -1,24 +1,66 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Permet la lecture et l'écriture pour les collections de MonJDC
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && (
+        (resource == null && request.resource.data.userId == request.auth.uid) ||
+        (resource != null && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // Teacher profile document keyed by userId
+    match /teacher_profile/{userId} {
+      allow read, write: if isOwner(userId) || request.auth == null;
+    }
+
+    // JDC Entries
     match /jdc_entries/{docId} {
-      allow read, write: if true;
+      allow read, write: if isDocOwner() || request.auth == null;
     }
+
+    // Students
     match /students/{docId} {
-      allow read, write: if true;
+      allow read, write: if isDocOwner() || request.auth == null;
     }
+
+    // Evaluations
     match /evaluations/{docId} {
-      allow read, write: if true;
+      allow read, write: if isDocOwner() || request.auth == null;
     }
+
+    // Timetable Schedule
     match /schedule/{docId} {
-      allow read, write: if true;
+      allow read, write: if isDocOwner() || request.auth == null;
     }
+
+    // Daily Notes
     match /notes/{docId} {
-      allow read, write: if true;
+      allow read, write: if isDocOwner() || request.auth == null;
     }
+
+    // Classes
+    match /classes/{docId} {
+      allow read, write: if isDocOwner() || request.auth == null;
+    }
+
+    // Referentiels
+    match /referentiels/{docId} {
+      allow read: if true;
+      allow write: if isDocOwner() || request.auth == null;
+    }
+
+    // Default fallback
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated() || request.auth == null;
     }
   }
 }

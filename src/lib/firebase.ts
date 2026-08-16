@@ -1,6 +1,6 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
-import { getAuth, type Auth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence, type Auth } from 'firebase/auth';
 import firebaseAppletConfig from '../../firebase-applet-config.json';
 
 const config = {
@@ -22,6 +22,12 @@ try {
   app = getApps().length === 0 ? initializeApp(config) : getApps()[0];
   db = databaseId && databaseId !== '(default)' ? getFirestore(app, databaseId) : getFirestore(app);
   auth = getAuth(app);
+  
+  // Ensure local browser persistence is active so users stay logged in across sessions & refreshes
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn('Persistance Firebase Auth locale:', err);
+  });
+
   console.info('🔥 Firebase Firestore initialisé avec succès pour MonJDC | Projet:', config.projectId, '| DB:', databaseId);
 } catch (error) {
   console.error('Erreur initialisation Firebase:', error);
