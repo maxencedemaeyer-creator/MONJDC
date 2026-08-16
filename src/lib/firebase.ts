@@ -3,13 +3,15 @@ import { getFirestore, type Firestore } from 'firebase/firestore';
 import { getAuth, setPersistence, browserLocalPersistence, type Auth } from 'firebase/auth';
 import firebaseAppletConfig from '../../firebase-applet-config.json';
 
-const config = {
-  apiKey: firebaseAppletConfig.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: firebaseAppletConfig.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: firebaseAppletConfig.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: firebaseAppletConfig.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: firebaseAppletConfig.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: firebaseAppletConfig.appId || import.meta.env.VITE_FIREBASE_APP_ID || '',
+// Project credentials configured for jdc-max
+export const firebaseConfig = {
+  apiKey: firebaseAppletConfig.apiKey || "AIzaSyBOQacrdSd7SEq9EtTlRwdCcmsA61w9gD4",
+  authDomain: firebaseAppletConfig.authDomain || "jdc-max.firebaseapp.com",
+  projectId: firebaseAppletConfig.projectId || "jdc-max",
+  storageBucket: firebaseAppletConfig.storageBucket || "jdc-max.firebasestorage.app",
+  messagingSenderId: firebaseAppletConfig.messagingSenderId || "145717990141",
+  appId: firebaseAppletConfig.appId || "1:145717990141:web:850cfca97b33a88c9c6494",
+  measurementId: firebaseAppletConfig.measurementId || "G-XECJVHV5Q7",
 };
 
 const databaseId = firebaseAppletConfig.firestoreDatabaseId || '(default)';
@@ -19,7 +21,7 @@ let db: Firestore;
 let auth: Auth;
 
 try {
-  app = getApps().length === 0 ? initializeApp(config) : getApps()[0];
+  app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
   db = databaseId && databaseId !== '(default)' ? getFirestore(app, databaseId) : getFirestore(app);
   auth = getAuth(app);
   
@@ -28,7 +30,7 @@ try {
     console.warn('Persistance Firebase Auth locale:', err);
   });
 
-  console.info('🔥 Firebase Firestore initialisé avec succès pour MonJDC | Projet:', config.projectId, '| DB:', databaseId);
+  console.info('🔥 Firebase Firestore initialisé avec succès pour MonJDC | Projet:', firebaseConfig.projectId, '| DB:', databaseId);
 } catch (error) {
   console.error('Erreur initialisation Firebase:', error);
   // Fallback
@@ -37,8 +39,8 @@ try {
   auth = getAuth(app);
 }
 
-export const isFirebaseConfigured = Boolean(config.apiKey && config.projectId);
-export const currentProjectId = config.projectId;
+export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+export const currentProjectId = firebaseConfig.projectId;
 export const currentDatabaseId = databaseId;
 
 export { app, db, auth };

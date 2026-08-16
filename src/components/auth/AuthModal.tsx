@@ -68,6 +68,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
       let msg = 'Une erreur est survenue lors de la connexion.';
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         msg = 'Email ou mot de passe incorrect.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        msg = 'La méthode de connexion Email/Mot de passe ou Google n’est pas activée sur la console Firebase du projet "jdc-max". Activez "Email/Mot de passe" dans Firebase Console > Authentification > Sign-in method.';
       } else if (err.code === 'auth/email-already-in-use') {
         msg = 'Cette adresse e-mail est déjà utilisée par un autre compte.';
       } else if (err.code === 'auth/weak-password') {
